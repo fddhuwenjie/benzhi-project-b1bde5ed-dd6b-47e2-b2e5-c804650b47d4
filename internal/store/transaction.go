@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -28,6 +29,47 @@ func (s *FileStore) writeTransaction(tx transaction) (string, error) {
 	return path, nil
 }
 
+// matchPrefix reports whether the transaction's audit event continues the
+// validated prefix chain: its PreviousHash matches the prefix's last event
+// hash, its Sequence is the next ordinal and its declared EventHash recomputes
+// correctly. Only transactions satisfying all three conditions may repair an
+// incomplete audit tail.
+func matchPrefix(tx transaction, events []domain.AuditEvent) bool {
+	previous := ""
+	if len(events) > 0 {
+		previous = events[len(events)-1].EventHash
+	}
+	if tx.Event.PreviousHash != previous || tx.Event.Sequence != int64(len(events)+1) {
+		return false
+	}
+	want, err := eventHash(tx.Event)
+	return err == nil && want == tx.Event.EventHash
+}
+
+// truncateAuditTail removes the incomplete trailing record from the audit log
+// so the matching transaction event can be re-appended cleanly.
+func truncateAuditTail(path string, tail *auditTail) error {
+	if tail == nil {
+		return nil
+	}
+	if err := os.Truncate(path, tail.offset); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY, 0o640)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if err = f.Sync(); err == nil {
+		err = f.Close()
+	} else {
+		_ = f.Close()
+	}
+	return err
+}
+
 func (s *FileStore) recoverTransactions() error {
 	dir := filepath.Join(s.dir, "transactions")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -50,9 +92,21 @@ func (s *FileStore) recoverTransactions() error {
 		if tx.Case == nil || tx.Event.EventHash == "" || tx.RequestID == "" {
 			return domain.NewError("recovery_failed", "事务日志字段不完整")
 		}
-		events, err := loadAudit(s.auditPath)
+		events, tail, err := loadAuditWithTail(s.auditPath)
 		if err != nil {
-			return err
+			if !errors.Is(err, ErrAuditTailCorrupt) || !matchPrefix(tx, events) {
+				return err
+			}
+			if err := truncateAuditTail(s.auditPath, tail); err != nil {
+				return err
+			}
+			if err := appendEvent(s.auditPath, tx.Event); err != nil {
+				return err
+			}
+			events, _, err = loadAuditWithTail(s.auditPath)
+			if err != nil {
+				return err
+			}
 		}
 		found := false
 		for _, event := range events {
@@ -62,11 +116,7 @@ func (s *FileStore) recoverTransactions() error {
 			}
 		}
 		if !found {
-			previous := ""
-			if len(events) > 0 {
-				previous = events[len(events)-1].EventHash
-			}
-			if tx.Event.PreviousHash != previous || tx.Event.Sequence != int64(len(events)+1) {
+			if !matchPrefix(tx, events) {
 				return domain.NewError("recovery_failed", "待恢复事务与审计链不连续")
 			}
 			if err := appendEvent(s.auditPath, tx.Event); err != nil {
