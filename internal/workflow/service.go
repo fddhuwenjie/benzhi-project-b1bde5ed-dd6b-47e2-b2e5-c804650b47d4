@@ -55,6 +55,11 @@ func (s *Service) Execute(ctx context.Context, caseID, action string, env Envelo
 	}
 	signature := commandSignature(caseID+"|"+action, env, env.Payload)
 	if prior, ok, err := s.repo.LookupRequest(ctx, env.RequestID, signature); ok || err != nil {
+		if ok && action == "close" && prior.Case != nil && prior.Case.State == domain.StateClosed && prior.Case.Archive == nil {
+			if audit, auditErr := s.repo.AuditSummary(ctx, caseID); auditErr == nil {
+				_ = prior.Case.BuildArchive(audit)
+			}
+		}
 		return prior, err
 	}
 	c, err := s.repo.Get(ctx, caseID)
