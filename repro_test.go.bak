@@ -1,0 +1,58 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"cablewindow/internal/httpui"
+	"cablewindow/internal/store"
+	"cablewindow/internal/workflow"
+)
+
+func TestReproWindowConflict(t *testing.T) {
+	repo, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+	h := httpui.New(workflow.New(repo, func() time.Time { return now }), slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	post := func(body string) (int, map[string]any) {
+		req := httptest.NewRequest(http.MethodPost, "/api/cases", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		var m map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &m)
+		return rec.Code, m
+	}
+
+	// First create succeeds
+	code, _ := post(`{"request_id":"r1","actor":"协调","role":"coordinator","expected_revision":0,"input":{"cable_segment":"SCS-A","work_scope":"修复","window_start":"2026-08-26T08:00:00Z","window_end":"2026-08-26T12:00:00Z","coordinator":"协调","risk_baseline":"中"}}`)
+	fmt.Printf("first create: code=%d\n", code)
+
+	// Overlapping create on same segment should now be rejected
+	code, m := post(`{"request_id":"r2","actor":"协调","role":"coordinator","expected_revision":0,"input":{"cable_segment":"SCS-A","work_scope":"修复","window_start":"2026-08-26T11:00:00Z","window_end":"2026-08-26T15:00:00Z","coordinator":"协调","risk_baseline":"中"}}`)
+	fmt.Printf("overlap create: code=%d body=%v\n", code, m)
+
+	// Boundary-touching create should be allowed (start == existing end)
+	code, _ = post(`{"request_id":"r3","actor":"协调","role":"coordinator","expected_revision":0,"input":{"cable_segment":"SCS-A","work_scope":"修复","window_start":"2026-08-26T12:00:00Z","window_end":"2026-08-26T15:00:00Z","coordinator":"协调","risk_baseline":"中"}}`)
+	fmt.Printf("boundary create: code=%d\n", code)
+
+	// Different segment should be allowed
+	code, _ = post(`{"request_id":"r4","actor":"协调","role":"coordinator","expected_revision":0,"input":{"cable_segment":"SCS-B","work_scope":"修复","window_start":"2026-08-26T09:00:00Z","window_end":"2026-08-26T11:00:00Z","coordinator":"协调","risk_baseline":"中"}}`)
+	fmt.Printf("other segment create: code=%d\n", code)
+
+	// Verify no snapshot/request index/audit for the rejected r2
+	ctx := context.Background()
+	cases, _ := repo.List(ctx)
+	fmt.Printf("case count: %d\n", len(cases))
+}

@@ -26,6 +26,20 @@ func New(repo domain.Repository, clock Clock) *Service {
 	return &Service{repo: repo, clock: clock}
 }
 
+func (s *Service) findWindowConflicts(ctx context.Context, segment string, start, end time.Time, excludeID string) []domain.WindowConflict {
+	finder, ok := s.repo.(interface {
+		FindOverlaps(context.Context, string, time.Time, time.Time, string) ([]domain.WindowConflict, error)
+	})
+	if !ok {
+		return nil
+	}
+	conflicts, err := finder.FindOverlaps(ctx, segment, start, end, excludeID)
+	if err != nil {
+		return nil
+	}
+	return conflicts
+}
+
 func (s *Service) Create(ctx context.Context, env Envelope, input CreateInput) (domain.CommitResult, error) {
 	if err := validateEnvelope(env, true); err != nil {
 		return domain.CommitResult{}, err
@@ -42,6 +56,11 @@ func (s *Service) Create(ctx context.Context, env Envelope, input CreateInput) (
 	c, err := domain.NewCase(newID("case"), input.CableSegment, input.WorkScope, input.WindowStart, input.WindowEnd, input.Coordinator, input.RiskBaseline, now)
 	if err != nil {
 		return domain.CommitResult{}, err
+	}
+	if conflicts := s.findWindowConflicts(ctx, strings.TrimSpace(input.CableSegment), input.WindowStart, input.WindowEnd, ""); conflicts != nil {
+		e := domain.NewError("window_conflict", "计划时间窗与未关闭个案交叠")
+		e.Details = map[string]any{"conflicts": conflicts}
+		return domain.CommitResult{}, e
 	}
 	return s.repo.Create(ctx, domain.Mutation{Case: c, ExpectedRevision: 0, RequestID: env.RequestID, Signature: signature, EventType: "case_created", Actor: env.Actor})
 }
@@ -73,16 +92,7 @@ func (s *Service) Execute(ctx context.Context, caseID, action string, env Envelo
 		if err := decodePayload(env.Payload, &in); err != nil {
 			return domain.CommitResult{}, err
 		}
-		var conflicts []domain.WindowConflict
-		if finder, ok := s.repo.(interface {
-			FindOverlaps(context.Context, string, time.Time, time.Time, string) ([]domain.WindowConflict, error)
-		}); ok {
-			conflicts, err = finder.FindOverlaps(ctx, strings.TrimSpace(in.CableSegment), in.WindowStart, in.WindowEnd, caseID)
-			if err != nil {
-				return domain.CommitResult{}, err
-			}
-		}
-		if len(conflicts) > 0 {
+		if conflicts := s.findWindowConflicts(ctx, strings.TrimSpace(in.CableSegment), in.WindowStart, in.WindowEnd, caseID); conflicts != nil {
 			e := domain.NewError("window_conflict", "计划时间窗与未关闭个案交叠")
 			e.Details = map[string]any{"conflicts": conflicts}
 			return domain.CommitResult{}, e
