@@ -235,6 +235,11 @@ func (s *FileStore) Get(ctx context.Context, id string) (*domain.MaintenanceCase
 }
 
 func (s *FileStore) List(ctx context.Context) ([]*domain.MaintenanceCase, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
 	entries, err := os.ReadDir(filepath.Join(s.dir, "cases"))
 	if err != nil {
 		return nil, err
@@ -292,10 +297,22 @@ func (s *FileStore) Audit(ctx context.Context, caseID string, offset, limit int)
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
 	s.global.Lock()
 	defer s.global.Unlock()
 	filtered := make([]domain.AuditEvent, 0)
-	for _, e := range s.events {
+	for i, e := range s.events {
+		if i%64 == 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
+		}
 		if e.CaseID == caseID {
 			filtered = append(filtered, e)
 		}
@@ -315,12 +332,24 @@ func (s *FileStore) VerifyAudit(ctx context.Context, caseID string) (domain.Audi
 	if err != nil {
 		return domain.AuditVerification{}, err
 	}
+	select {
+	case <-ctx.Done():
+		return domain.AuditVerification{}, ctx.Err()
+	default:
+	}
 	s.global.Lock()
 	defer s.global.Unlock()
 	verification := domain.AuditVerification{CaseID: caseID, Valid: true, Revision: c.Revision}
 	var priorRevision int64
 	previousHash := ""
-	for _, event := range s.events {
+	for i, event := range s.events {
+		if i%64 == 0 {
+			select {
+			case <-ctx.Done():
+				return domain.AuditVerification{}, ctx.Err()
+			default:
+			}
+		}
 		want, hashErr := eventHash(event)
 		if hashErr != nil || want != event.EventHash || event.PreviousHash != previousHash {
 			verification.Valid = false
@@ -353,12 +382,24 @@ func (s *FileStore) AuditSummary(ctx context.Context, caseID string) (domain.Aud
 	if !verification.Valid {
 		return domain.AuditSummary{}, domain.NewError("audit_invalid", "审计链验证未通过")
 	}
+	select {
+	case <-ctx.Done():
+		return domain.AuditSummary{}, ctx.Err()
+	default:
+	}
 	s.global.Lock()
 	defer s.global.Unlock()
 	summary := domain.AuditSummary{CaseID: caseID, EventCount: verification.EventCount, FirstHash: verification.FirstHash, LastHash: verification.LastHash, FinalRevision: verification.Revision}
 	actorSet := map[string]bool{}
 	typeCounts := map[string]int{}
-	for _, event := range s.events {
+	for i, event := range s.events {
+		if i%64 == 0 {
+			select {
+			case <-ctx.Done():
+				return domain.AuditSummary{}, ctx.Err()
+			default:
+			}
+		}
 		if event.CaseID != caseID {
 			continue
 		}
