@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>海缆维护窗口放行台</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <header><div><p class="eyebrow">SUBSEA CABLE CONTROL</p><h1>海缆维护窗口放行台</h1></div><span id="ready" class="badge">检查服务…</span></header>
+  <main>
+    <section class="intro"><div><h2>将每一个放行条件留在航迹上</h2><p>从船舶与装备核验，到风险审查、开工门禁、现场偏差及冻结归档。状态只在证据齐备时前进。</p></div><button id="refresh">刷新个案</button></section>
+    <div id="notice" role="status" aria-live="polite"></div>
+    <section class="grid">
+      <aside class="panel"><div class="panel-title"><h2>维护个案</h2><span id="count">0</span></div><div id="cases" class="case-list"><p class="muted">正在加载…</p></div></aside>
+      <article class="panel workspace">
+        <nav class="stages" aria-label="流程阶段"><span>证据核验</span><span>协调确认</span><span>风险审查</span><span>开工门禁</span><span>现场日志</span><span>偏差处置</span><span>关闭归档</span></nav>
+        <div id="detail"><div class="empty"><h2>选择一个维护窗口</h2><p>查看修订、阻断项、时间线与所有业务记录。</p></div></div>
+      </article>
+    </section>
+    <section class="forms">
+      <form id="create-form" class="panel"><h2>建立草稿</h2><div class="form-grid">
+        <label>海缆区段<input name="cable_segment" required placeholder="SCS-04 / KP 128–142"></label>
+        <label>责任协调员<input name="coordinator" required placeholder="张协调"></label>
+        <label>计划开始<input name="window_start" type="datetime-local" required></label>
+        <label>计划结束<input name="window_end" type="datetime-local" required></label>
+        <label class="wide">作业范围<textarea name="work_scope" required placeholder="接续盒检查与光纤修复"></textarea></label>
+        <label class="wide">初始风险基线<textarea name="risk_baseline" required placeholder="季风转换期，中等海况风险"></textarea></label>
+      </div><button type="submit">保存修订 1</button></form>
+      <form id="command-form" class="panel"><h2>执行状态命令</h2><p class="muted">选择个案后，按允许动作提交。载荷模板会随命令更新。</p><div class="form-grid">
+        <label>操作人<input name="actor" required value="现场操作员"></label><label>角色<select name="role" required></select></label>
+        <label>动作<select name="action" required></select></label><label>预期修订<input name="revision" type="number" min="1" required></label>
+        <label class="wide">命令载荷 JSON<textarea name="payload" class="code" required>{}</textarea></label>
+      </div><button type="submit">提交并写入审计链</button></form>
+    </section>
+  </main>
+  <footer>本地单进程工作台 · 乐观并发 · 幂等命令 · 哈希链审计</footer>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>
+
